@@ -1,7 +1,7 @@
 use pretty_hex::*;
 use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha512};
-use std::fs;
+use std::{fs, str::FromStr};
 use tempfile::tempdir_in;
 
 use tss_esapi::{
@@ -10,7 +10,7 @@ use tss_esapi::{
         algorithm::AsymmetricAlgorithm,
         resource_handles::Hierarchy,
     },
-    tcti_ldr::TctiNameConf,
+    TctiNameConf,
     traits::Marshall,
     Context,
 };
@@ -62,13 +62,25 @@ fn main() {
         "ek_public_IN: {:?}",
         ek_public.marshall().unwrap().hex_dump()
     );
-    //Ensure that you set your TCTI environment variable before running this code
-    // eg. export TPM2TOOLS_TCTI="device:/dev/tpmrm0" and if using sudo use sudo -E
-    //To generate epub to compare against you can use tpm2_createek
+    // To set your TCTI environment variable before running this code
+    // use export TPM2TOOLS_TCTI="device:/dev/tpmrm0" and if using sudo use sudo -E
+    // To generate ekpub to compare against you can use tpm2_createek
     // sudo -E tpm2_createek -c ek.ctx -G rsa -u ek.pub
-    //sudo hexdump ek.pub
-    let tcti_name_conf = TctiNameConf::from_environment_variable().expect("Failed to get TCTI");
-    let mut context = Context::new(tcti_name_conf).expect("Failed to create context");
+    // sudo hexdump ek.pub
+    // Get the TCTI device path from the environment variable or use a default
+    let tcti_path = std::env::var("TCTI").unwrap_or_else(|_| {
+        if std::path::Path::new("/dev/tpmrm0").exists() {
+            "device:/dev/tpmrm0".to_string()
+        } else {
+            "device:/dev/tpm0".to_string()
+        }
+    });
+
+    // Create a new TPM context using the TCTI device path
+    let mut context = Context::new(
+        TctiNameConf::from_str(&tcti_path).expect("Failed to convert TctiNameConf from string"),
+    )
+    .expect("Failed to create Context");
     let ek = context
         .execute_with_nullauth_session(|ctx| {
             ctx.create_primary(Hierarchy::Endorsement, ek_public, None, None, None, None)
