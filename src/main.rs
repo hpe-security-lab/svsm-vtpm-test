@@ -18,6 +18,7 @@ use sev::firmware::guest::AttestationReport;
 use sha2::{Digest, Sha512};
 use std::{fs, str::FromStr};
 use tempfile::tempdir_in;
+use clap::Parser;
 
 use tss_esapi::{
     abstraction::ek,
@@ -26,36 +27,58 @@ use tss_esapi::{
     Context, TctiNameConf,
 };
 
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {
+    #[arg(short, long, action = clap::ArgAction::SetTrue, 
+        help = "Use configfs-tsm svsm attribute, required by pre v6.10 kernels")]
+    svsm_attribute: bool,
+}
+
 fn main() {
+    let cli = Cli::parse();
+
     println!("Getting vTPM attestation report from SVSM uisng Linux configfs_tsm");
-    //create temp directory
+
+    // create temp directory
     let tmp_dir =
         tempdir_in("/sys/kernel/config/tsm/report").expect("Failed to create temp directory");
     println!("Temp dir: {:?}", tmp_dir);
 
-    //write 1 to svsm file
-    fs::write(tmp_dir.path().join("svsm"), "1").expect("Failed to write to svsm file");
+    if cli.svsm_attribute {
+        println!("Using configfs-tsm svsm attribute found in pre Linux v6.10");
+        // write 1 to svsm file
+        fs::write(tmp_dir.path().join("svsm"), "1")
+        .expect("Failed to write to svsm attribute file");
+    } else {
+        // write "svsm" to service_provider file
+        println!("Using configfs-tsm service_provider attribute added in Linux v6.10");
+        fs::write(tmp_dir.path().join("service_provider"), "svsm")
+            .expect("Failed to write to service_provider attribute file");
+    }
 
     let nonce: [u8; 64] = [0xff; 64];
     // write nonce to inblob file
     fs::write(tmp_dir.path().join("inblob"), nonce).expect("Failed to write to inblob file");
+    
     let attest_vtpm_guid = "c476f1eb-0123-45a5-9641-b4e7dde5bfe3";
-    //write attest_vtpm_guid to service_guid file
+    // write attest_vtpm_guid to service_guid file
     fs::write(tmp_dir.path().join("service_guid"), attest_vtpm_guid)
         .expect("Failed to write to service_guid file");
-    //read outblob file
+    
+    // read outblob file
     let outblob = fs::read(tmp_dir.path().join("outblob")).expect("Failed to read outblob file");
     println!("outblob: {:?}", outblob.hex_dump());
 
-    //write outblob to file
+    // write outblob to file
     fs::write("report.bin", &outblob).expect("Failed to write outblob to file");
 
-    //read manifest file
+    // read manifest file
     let manifest =
         fs::read(tmp_dir.path().join("manifestblob")).expect("Failed to read manifest file");
     println!("manifest: {:?}", manifest.hex_dump());
 
-    // parse attestaion report in outblob
+    // parse attestation report in outblob
     let report: AttestationReport = bincode::deserialize(&outblob).unwrap();
     println!("report: {}", report);
 
@@ -71,6 +94,7 @@ fn main() {
         "ek_public_IN: {:?}",
         ek_public.marshall().unwrap().hex_dump()
     );
+
     // To set your TCTI environment variable before running this code
     // use export TPM2TOOLS_TCTI="device:/dev/tpmrm0" and if using sudo use sudo -E
     // To generate ekpub to compare against you can use tpm2_createek
@@ -102,11 +126,11 @@ fn main() {
 
     println!("tmpt_public: {:?}", ekpub_tmpt_pub.hex_dump());
 
-    //check that ek pub from tpm matches ek pub from manifest
+    // check that ek pub from tpm matches ek pub from manifest
     assert_eq!(ekpub_tmpt_pub, manifest);
     println!("\n\nEK public key in the report matches the one created in vTPM!\n");
 
-    //recalculate Sha512(nonce||manifest)
+    // recalculate Sha512(nonce||manifest)
     println!(
         "Recalculating Sha512(nonce||ekpub) and verifying that it matches one in the report\n"
     );
